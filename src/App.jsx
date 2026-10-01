@@ -4,10 +4,12 @@ import Login from './components/Login';
 import Marca from './components/Marca';
 import AgendamentoGravacoes from './components/AgendamentoGravacoes';
 import MensagensModelos from './components/MensagensModelos';
+import MenuUsuario from './components/MenuUsuario';
 
 export default function App() {
   const [sessao, setSessao] = useState(undefined); // undefined = verificando
   const [gestor, setGestor] = useState(false);
+  const [nome, setNome] = useState(null);
   const [pagina, setPagina] = useState('agenda');
 
   useEffect(() => {
@@ -16,14 +18,20 @@ export default function App() {
     return () => data.subscription.unsubscribe();
   }, []);
 
-  // O menu "Mensagens" só aparece para o Gestor (o banco também bloqueia os demais)
+  // Perfil do usuário: nome de exibição + papel.
+  // O menu "Mensagens" só aparece para o Gestor (o banco também bloqueia os demais).
   useEffect(() => {
     if (!sessao) {
       setGestor(false);
+      setNome(null);
       setPagina('agenda');
       return;
     }
-    supabase.rpc('eh_gestor').then(({ data }) => setGestor(data === true));
+    supabase.rpc('meu_perfil').then(({ data }) => {
+      const perfil = Array.isArray(data) ? data[0] : data;
+      setGestor(perfil?.papel === 'gestor');
+      setNome(perfil?.nome ?? null);
+    });
   }, [sessao?.user?.id]);
 
   if (sessao === undefined) {
@@ -72,18 +80,8 @@ export default function App() {
             )}
           </div>
 
-          <div className="flex min-w-0 items-center gap-4 py-3 text-sm">
-            <span className="hidden truncate text-slate-500 md:inline">
-              {sessao.user.email}
-              {gestor && <span className="ml-2 rounded-full bg-violet-50 px-2 py-0.5 text-xs text-violet-700">Gestor</span>}
-            </span>
-            <button
-              type="button"
-              onClick={() => supabase.auth.signOut()}
-              className="rounded font-medium text-slate-600 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
-            >
-              Sair
-            </button>
+          <div className="py-2">
+            <MenuUsuario nome={nome} gestor={gestor} onNomeAtualizado={setNome} />
           </div>
         </div>
       </header>
