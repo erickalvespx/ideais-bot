@@ -12,12 +12,26 @@ const STATUS = {
   falha_envio: { rotulo: 'WhatsApp não entregue', classe: 'bg-rose-50 text-rose-700 ring-rose-200' },
 };
 
+export const TIPOS = {
+  gravacao: { rotulo: 'Gravação', icone: '🎬', artigo: 'a gravação', classe: 'bg-blue-50 text-blue-700 ring-blue-200' },
+  reuniao: { rotulo: 'Reunião', icone: '🤝', artigo: 'a reunião', classe: 'bg-violet-50 text-violet-700 ring-violet-200' },
+};
+
 const PRECISA_ATENCAO = new Set(['cancelado_por_falta_de_retorno', 'falha_envio']);
 const ATIVOS = new Set(['agendado', 'aguardando_confirmacao', 'confirmado']);
 const REAGENDAVEL = new Set(['cancelado_por_falta_de_retorno', 'falha_envio', 'cancelado_pela_agencia']);
 
 const UMA_HORA = 60 * 60 * 1000;
-const FORM_VAZIO = { nome: '', telefone: '', dataHora: '', observacoes: '' };
+const FORM_VAZIO = {
+  tipo: 'gravacao',
+  nome: '',
+  telefone: '',
+  dataHora: '',
+  modalidade: 'presencial',
+  local: '',
+  link: '',
+  observacoes: '',
+};
 
 // ------------------------------------------------------------------ helpers
 
@@ -35,8 +49,15 @@ function mascararTelefone(valor) {
 }
 
 const telefoneValido = (d) => d.length === 10 || (d.length === 11 && d[2] === '9');
-
 const exibirTelefone = (t) => mascararTelefone(t?.startsWith('55') ? t.slice(2) : t);
+
+/** Aceita "meet.google.com/abc" e completa com https:// */
+function normalizarLink(v) {
+  const t = String(v ?? '').trim();
+  if (!t) return '';
+  return /^https?:\/\//i.test(t) ? t : `https://${t}`;
+}
+const linkValido = (v) => /^https?:\/\/[^\s.]+\.[^\s]+$/i.test(v);
 
 /** Date -> "YYYY-MM-DDTHH:mm" no fuso do navegador (formato do datetime-local) */
 function paraInputLocal(data) {
@@ -73,6 +94,8 @@ function traduzirErro(error) {
   const msg = error?.message ?? '';
   if (msg.includes('agendamentos_telefone_chk')) return 'Confira o WhatsApp: use DDD + número, ex. (88) 99999-9999.';
   if (msg.includes('agendamentos_nome_chk')) return 'O nome do cliente precisa ter entre 2 e 120 caracteres.';
+  if (msg.includes('agendamentos_link_chk')) return 'Confira o link: ele precisa começar com https://';
+  if (msg.includes('agendamentos_reuniao_modalidade_chk')) return 'Escolha se a reunião é presencial ou online.';
   if (msg.includes('row-level security')) return 'Sua sessão expirou. Entre novamente para agendar.';
   return msg || 'Não foi possível salvar. Tente de novo.';
 }
@@ -82,6 +105,8 @@ function mesclar(lista, registro) {
   return [...semEle, registro].sort((a, b) => new Date(a.data_gravacao) - new Date(b.data_gravacao));
 }
 
+const tipoDe = (ag) => (ag?.tipo === 'reuniao' ? 'reuniao' : 'gravacao');
+
 // ------------------------------------------------------------------ subcomponentes
 
 function Etiqueta({ status }) {
@@ -90,6 +115,45 @@ function Etiqueta({ status }) {
     <span className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${s.classe}`}>
       {s.rotulo}
     </span>
+  );
+}
+
+function EtiquetaTipo({ tipo }) {
+  const t = TIPOS[tipo] ?? TIPOS.gravacao;
+  return (
+    <span className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${t.classe}`}>
+      <span aria-hidden="true">{t.icone}</span>
+      {t.rotulo}
+    </span>
+  );
+}
+
+/** Botões segmentados (tipo, modalidade, filtros) */
+function Segmentado({ opcoes, valor, onChange, rotulo, tamanho = 'md' }) {
+  return (
+    <div role="radiogroup" aria-label={rotulo} className="inline-flex rounded-lg bg-slate-100 p-1">
+      {opcoes.map((o) => {
+        const ativo = o.valor === valor;
+        return (
+          <button
+            key={o.valor}
+            type="button"
+            role="radio"
+            aria-checked={ativo}
+            onClick={() => onChange(o.valor)}
+            className={`flex items-center gap-1.5 rounded-md font-medium transition focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${
+              tamanho === 'sm' ? 'px-2.5 py-1 text-xs' : 'px-3 py-1.5 text-sm'
+            } ${ativo ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+          >
+            {o.icone && <span aria-hidden="true">{o.icone}</span>}
+            {o.rotulo}
+            {o.total !== undefined && (
+              <span className={`tabular-nums text-xs ${ativo ? 'text-slate-500' : 'text-slate-400'}`}>{o.total}</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -113,7 +177,7 @@ function Trilha({ ag }) {
           <li key={e.rotulo} className="min-w-0">
             <div
               className={`h-1 rounded-full ${
-                feito ? 'bg-gradient-to-r from-blue-600 to-violet-600' : parouAqui ? 'bg-rose-400' : 'bg-slate-200'
+                feito ? 'bg-linear-to-r from-blue-600 to-violet-600' : parouAqui ? 'bg-rose-400' : 'bg-slate-200'
               }`}
             />
             <p
@@ -131,8 +195,43 @@ function Trilha({ ag }) {
   );
 }
 
+function Onde({ ag }) {
+  if (ag.modalidade === 'online' && ag.link) {
+    return (
+      <p className="mt-1 flex min-w-0 items-center gap-1.5 text-sm text-slate-600">
+        <span aria-hidden="true">💻</span>
+        <span className="shrink-0">Online:</span>
+        <a
+          href={ag.link}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="truncate text-violet-700 underline decoration-violet-300 underline-offset-2 hover:text-violet-900"
+        >
+          {ag.link.replace(/^https?:\/\//i, '')}
+        </a>
+      </p>
+    );
+  }
+  if (ag.local) {
+    return (
+      <p className="mt-1 flex min-w-0 items-center gap-1.5 text-sm text-slate-600">
+        <span aria-hidden="true">📍</span>
+        {ag.modalidade === 'presencial' && <span className="shrink-0">Presencial:</span>}
+        <span className="truncate">{ag.local}</span>
+      </p>
+    );
+  }
+  if (ag.modalidade) {
+    return (
+      <p className="mt-1 text-sm text-slate-500">{ag.modalidade === 'online' ? '💻 Online' : '📍 Presencial'}</p>
+    );
+  }
+  return null;
+}
+
 function LinhaAgendamento({ ag, agora, onCancelar, onReagendar, ocupado }) {
   const passou = new Date(ag.data_gravacao) < agora;
+  const tipo = TIPOS[tipoDe(ag)];
 
   return (
     <li className={`px-4 py-4 sm:px-5 ${passou && ATIVOS.has(ag.status) ? 'opacity-60' : ''}`}>
@@ -147,12 +246,16 @@ function LinhaAgendamento({ ag, agora, onCancelar, onReagendar, ocupado }) {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1.5">
             <div className="min-w-0">
-              <p className="truncate font-medium text-slate-900">{ag.cliente_nome}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="truncate font-medium text-slate-900">{ag.cliente_nome}</p>
+                <EtiquetaTipo tipo={tipoDe(ag)} />
+              </div>
               <p className="text-sm tabular-nums text-slate-500">{exibirTelefone(ag.telefone)}</p>
             </div>
             <Etiqueta status={ag.status} />
           </div>
 
+          <Onde ag={ag} />
           {ag.observacoes && <p className="mt-2 text-sm text-slate-600">{ag.observacoes}</p>}
 
           {ag.status === 'aguardando_confirmacao' && ag.prazo_confirmacao && (
@@ -187,7 +290,7 @@ function LinhaAgendamento({ ag, agora, onCancelar, onReagendar, ocupado }) {
                   onClick={() => onCancelar(ag)}
                   className="rounded text-slate-500 hover:text-rose-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 disabled:opacity-50"
                 >
-                  Cancelar gravação
+                  Cancelar {tipo.rotulo.toLowerCase()}
                 </button>
               )}
             </div>
@@ -200,21 +303,26 @@ function LinhaAgendamento({ ag, agora, onCancelar, onReagendar, ocupado }) {
 
 // ------------------------------------------------------------------ componente principal
 
-export default function AgendamentoGravacoes() {
+export default function Agenda() {
   const [form, setForm] = useState(FORM_VAZIO);
   const [erros, setErros] = useState({});
   const [salvando, setSalvando] = useState(false);
-  const [aviso, setAviso] = useState(null); // { tipo: 'ok' | 'erro', texto }
+  const [aviso, setAviso] = useState(null); // { tipo: 'ok' | 'erro' | 'info', texto }
 
   const [agendamentos, setAgendamentos] = useState([]);
   const [carregando, setCarregando] = useState(true);
   const [erroLista, setErroLista] = useState(null);
   const [filtro, setFiltro] = useState('proximas');
+  const [filtroTipo, setFiltroTipo] = useState('todos');
   const [cancelandoId, setCancelandoId] = useState(null);
   const [agora, setAgora] = useState(() => new Date());
 
   const campoDataRef = useRef(null);
   const campoNomeRef = useRef(null);
+
+  const ehReuniao = form.tipo === 'reuniao';
+  const ehOnline = ehReuniao && form.modalidade === 'online';
+  const nomeTipo = TIPOS[form.tipo].rotulo.toLowerCase();
 
   // relógio da tela (agrupa "Hoje/Amanhã" e esmaece o que já passou)
   useEffect(() => {
@@ -241,7 +349,7 @@ export default function AgendamentoGravacoes() {
   useEffect(() => {
     carregar();
     const canal = supabase
-      .channel('agendamentos-gravacao')
+      .channel('agenda-unificada')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'agendamentos' }, (p) => {
         setAgendamentos((atual) =>
           p.eventType === 'DELETE' ? atual.filter((a) => a.id !== p.old.id) : mesclar(atual, p.new)
@@ -255,14 +363,29 @@ export default function AgendamentoGravacoes() {
 
   // ---------------------------------------------------------------- filtros
 
+  const doTipo = useMemo(
+    () => (filtroTipo === 'todos' ? agendamentos : agendamentos.filter((a) => tipoDe(a) === filtroTipo)),
+    [agendamentos, filtroTipo]
+  );
+
   const listas = useMemo(() => {
     const limiteProximas = agora.getTime() - UMA_HORA;
     return {
-      proximas: agendamentos.filter(
-        (a) => ATIVOS.has(a.status) && new Date(a.data_gravacao).getTime() >= limiteProximas
-      ),
-      atencao: agendamentos.filter((a) => PRECISA_ATENCAO.has(a.status)),
-      todas: agendamentos,
+      proximas: doTipo.filter((a) => ATIVOS.has(a.status) && new Date(a.data_gravacao).getTime() >= limiteProximas),
+      atencao: doTipo.filter((a) => PRECISA_ATENCAO.has(a.status)),
+      todas: doTipo,
+    };
+  }, [doTipo, agora]);
+
+  const totaisTipo = useMemo(() => {
+    const limiteProximas = agora.getTime() - UMA_HORA;
+    const base = agendamentos.filter(
+      (a) => ATIVOS.has(a.status) && new Date(a.data_gravacao).getTime() >= limiteProximas
+    );
+    return {
+      todos: base.length,
+      gravacao: base.filter((a) => tipoDe(a) === 'gravacao').length,
+      reuniao: base.filter((a) => tipoDe(a) === 'reuniao').length,
     };
   }, [agendamentos, agora]);
 
@@ -285,6 +408,11 @@ export default function AgendamentoGravacoes() {
     setErros((er) => ({ ...er, [campo]: undefined }));
   };
 
+  const definir = (campo, valor) => {
+    setForm((f) => ({ ...f, [campo]: valor }));
+    setErros((er) => ({ ...er, [campo]: undefined, local: undefined, link: undefined }));
+  };
+
   function validar() {
     const novo = {};
     const nome = form.nome.trim();
@@ -295,6 +423,12 @@ export default function AgendamentoGravacoes() {
     if (!form.dataHora) novo.dataHora = 'Escolha o dia e o horário.';
     else if (new Date(form.dataHora) <= new Date()) novo.dataHora = 'Escolha um horário no futuro.';
 
+    if (ehOnline) {
+      const link = normalizarLink(form.link);
+      if (!link) novo.link = 'Cole o link da reunião (Meet, Zoom, Teams…).';
+      else if (!linkValido(link)) novo.link = 'Esse link não parece válido. Ex.: https://meet.google.com/abc-defg-hij';
+    }
+
     setErros(novo);
     return Object.keys(novo).length === 0;
   }
@@ -304,17 +438,20 @@ export default function AgendamentoGravacoes() {
     setAviso(null);
     if (!validar()) return;
 
+    const local = form.local.trim();
+    const registro = {
+      tipo: form.tipo,
+      cliente_nome: form.nome.trim(),
+      telefone: `55${somenteDigitos(form.telefone)}`,
+      data_gravacao: new Date(form.dataHora).toISOString(),
+      observacoes: form.observacoes.trim() || null,
+      modalidade: ehReuniao ? form.modalidade : null,
+      local: ehOnline ? null : local || null,
+      link: ehOnline ? normalizarLink(form.link) : null,
+    };
+
     setSalvando(true);
-    const { data, error } = await supabase
-      .from('agendamentos')
-      .insert({
-        cliente_nome: form.nome.trim(),
-        telefone: `55${somenteDigitos(form.telefone)}`,
-        data_gravacao: new Date(form.dataHora).toISOString(),
-        observacoes: form.observacoes.trim() || null,
-      })
-      .select()
-      .single();
+    const { data, error } = await supabase.from('agendamentos').insert(registro).select().single();
     setSalvando(false);
 
     if (error) {
@@ -325,18 +462,22 @@ export default function AgendamentoGravacoes() {
     setAgendamentos((atual) => mesclar(atual, data));
     setAviso({
       tipo: 'ok',
-      texto: `Gravação de ${data.cliente_nome} agendada para ${descreverQuando(data.data_gravacao, new Date())}.`,
+      texto: `${TIPOS[tipoDe(data)].rotulo} com ${data.cliente_nome} agendada para ${descreverQuando(data.data_gravacao, new Date())}.`,
     });
-    setForm(FORM_VAZIO);
+    setForm((f) => ({ ...FORM_VAZIO, tipo: f.tipo, modalidade: f.modalidade }));
     setFiltro('proximas');
     campoNomeRef.current?.focus();
   }
 
   function reagendar(ag) {
     setForm({
+      tipo: tipoDe(ag),
       nome: ag.cliente_nome,
       telefone: exibirTelefone(ag.telefone),
       dataHora: '',
+      modalidade: ag.modalidade ?? 'presencial',
+      local: ag.local ?? '',
+      link: ag.link ?? '',
       observacoes: ag.observacoes ?? '',
     });
     setErros({});
@@ -347,7 +488,7 @@ export default function AgendamentoGravacoes() {
 
   async function cancelar(ag) {
     const ok = window.confirm(
-      `Cancelar a gravação de ${ag.cliente_nome} (${descreverQuando(ag.data_gravacao, agora)})?\nNenhuma mensagem será enviada ao cliente.`
+      `Cancelar ${TIPOS[tipoDe(ag)].artigo} com ${ag.cliente_nome} (${descreverQuando(ag.data_gravacao, agora)})?\nNenhuma mensagem será enviada ao cliente.`
     );
     if (!ok) return;
 
@@ -365,11 +506,11 @@ export default function AgendamentoGravacoes() {
   }
 
   // aviso contextual do horário escolhido
-  const horasAteGravacao = form.dataHora ? (new Date(form.dataHora) - agora) / UMA_HORA : null;
+  const horasAte = form.dataHora ? (new Date(form.dataHora) - agora) / UMA_HORA : null;
   let dicaHorario = 'O cliente recebe o pedido de confirmação 24h antes e tem 2h para responder.';
-  if (horasAteGravacao !== null && horasAteGravacao > 0 && horasAteGravacao < 2) {
-    dicaHorario = 'Faltam menos de 2h: o pedido de confirmação sai ao salvar e vale até o horário da gravação.';
-  } else if (horasAteGravacao !== null && horasAteGravacao > 0 && horasAteGravacao < 24) {
+  if (horasAte !== null && horasAte > 0 && horasAte < 2) {
+    dicaHorario = 'Faltam menos de 2h: o pedido de confirmação sai ao salvar e vale até o horário marcado.';
+  } else if (horasAte !== null && horasAte > 0 && horasAte < 24) {
     dicaHorario = 'Faltam menos de 24h: o pedido de confirmação sai assim que você salvar.';
   }
 
@@ -389,19 +530,32 @@ export default function AgendamentoGravacoes() {
     <div className="text-slate-900">
       <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:py-12">
         <header className="mb-8 max-w-2xl">
-          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Agenda de gravações</h1>
+          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Agenda</h1>
           <p className="mt-2 text-sm leading-6 text-slate-600">
-            Agende aqui e o WhatsApp cuida do resto: pedido de confirmação 24h antes, liberação do horário se o
-            cliente não responder em 2h e lembrete 1h antes da gravação.
+            Gravações e reuniões num lugar só. O WhatsApp cuida do resto: pedido de confirmação 24h antes, liberação do
+            horário se o cliente não responder em 2h e lembrete 1h antes.
           </p>
         </header>
 
         <div className="grid items-start gap-8 lg:grid-cols-[360px_minmax(0,1fr)]">
           {/* ------------------------------------------------ formulário */}
           <section className="rounded-2xl bg-white p-5 ring-1 ring-slate-200 sm:p-6 lg:sticky lg:top-8">
-            <h2 className="text-base font-semibold">Nova gravação</h2>
+            <h2 className="text-base font-semibold">Novo agendamento</h2>
 
             <form onSubmit={salvar} noValidate className="mt-5 space-y-5">
+              <div>
+                <span className="mb-1.5 block text-sm font-medium text-slate-700">Tipo</span>
+                <Segmentado
+                  rotulo="Tipo de agendamento"
+                  valor={form.tipo}
+                  onChange={(v) => definir('tipo', v)}
+                  opcoes={[
+                    { valor: 'gravacao', rotulo: 'Gravação', icone: '🎬' },
+                    { valor: 'reuniao', rotulo: 'Reunião', icone: '🤝' },
+                  ]}
+                />
+              </div>
+
               <div>
                 <label htmlFor="nome" className="block text-sm font-medium text-slate-700">
                   Nome do cliente
@@ -438,14 +592,12 @@ export default function AgendamentoGravacoes() {
                   aria-describedby={erros.telefone ? 'erro-telefone' : undefined}
                   className={`${inputBase} tabular-nums ${anel('telefone')}`}
                 />
-                {erros.telefone && (
-                  <p id="erro-telefone" className="mt-1.5 text-sm text-rose-600">{erros.telefone}</p>
-                )}
+                {erros.telefone && <p id="erro-telefone" className="mt-1.5 text-sm text-rose-600">{erros.telefone}</p>}
               </div>
 
               <div>
                 <label htmlFor="dataHora" className="block text-sm font-medium text-slate-700">
-                  Data e horário da gravação
+                  Data e horário da {nomeTipo}
                 </label>
                 <input
                   id="dataHora"
@@ -465,6 +617,61 @@ export default function AgendamentoGravacoes() {
                 )}
               </div>
 
+              {ehReuniao && (
+                <div>
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">Modalidade</span>
+                  <Segmentado
+                    rotulo="Modalidade da reunião"
+                    valor={form.modalidade}
+                    onChange={(v) => definir('modalidade', v)}
+                    opcoes={[
+                      { valor: 'presencial', rotulo: 'Presencial', icone: '📍' },
+                      { valor: 'online', rotulo: 'Online', icone: '💻' },
+                    ]}
+                  />
+                </div>
+              )}
+
+              {ehOnline ? (
+                <div>
+                  <label htmlFor="link" className="block text-sm font-medium text-slate-700">
+                    Link da reunião
+                  </label>
+                  <input
+                    id="link"
+                    type="url"
+                    inputMode="url"
+                    autoComplete="off"
+                    maxLength={500}
+                    value={form.link}
+                    onChange={alterar('link')}
+                    placeholder="https://meet.google.com/abc-defg-hij"
+                    aria-invalid={Boolean(erros.link)}
+                    aria-describedby="ajuda-link"
+                    className={`${inputBase} ${anel('link')}`}
+                  />
+                  <p id="ajuda-link" className={`mt-1.5 text-xs leading-5 ${erros.link ? 'text-rose-600' : 'text-slate-500'}`}>
+                    {erros.link ?? 'O link vai junto nas mensagens de confirmação e lembrete.'}
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <label htmlFor="local" className="block text-sm font-medium text-slate-700">
+                    Local da {nomeTipo} <span className="font-normal text-slate-400">(opcional)</span>
+                  </label>
+                  <input
+                    id="local"
+                    type="text"
+                    autoComplete="off"
+                    maxLength={300}
+                    value={form.local}
+                    onChange={alterar('local')}
+                    placeholder={ehReuniao ? 'Endereço ou sala' : 'Estúdio, externa no cliente…'}
+                    className={`${inputBase} ring-slate-300`}
+                  />
+                </div>
+              )}
+
               <div>
                 <label htmlFor="observacoes" className="block text-sm font-medium text-slate-700">
                   Observações <span className="font-normal text-slate-400">(opcional, uso interno)</span>
@@ -475,7 +682,7 @@ export default function AgendamentoGravacoes() {
                   maxLength={500}
                   value={form.observacoes}
                   onChange={alterar('observacoes')}
-                  placeholder="Local, roteiro, equipe…"
+                  placeholder={ehReuniao ? 'Pauta, participantes…' : 'Roteiro, equipe…'}
                   className={`${inputBase} resize-none ring-slate-300`}
                 />
               </div>
@@ -498,16 +705,30 @@ export default function AgendamentoGravacoes() {
               <button
                 type="submit"
                 disabled={salvando}
-                className="w-full rounded-lg bg-gradient-to-r from-blue-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+                className="w-full rounded-lg bg-linear-to-r from-blue-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {salvando ? 'Agendando…' : 'Agendar gravação'}
+                {salvando ? 'Agendando…' : `Agendar ${nomeTipo}`}
               </button>
             </form>
           </section>
 
           {/* ------------------------------------------------ agenda */}
           <section aria-labelledby="titulo-agenda" className="min-w-0">
-            <h2 id="titulo-agenda" className="sr-only">Gravações agendadas</h2>
+            <h2 id="titulo-agenda" className="sr-only">Agendamentos</h2>
+
+            <div className="mb-3">
+              <Segmentado
+                rotulo="Filtrar por tipo"
+                tamanho="sm"
+                valor={filtroTipo}
+                onChange={setFiltroTipo}
+                opcoes={[
+                  { valor: 'todos', rotulo: 'Todos', total: totaisTipo.todos },
+                  { valor: 'gravacao', rotulo: 'Gravações', icone: '🎬', total: totaisTipo.gravacao },
+                  { valor: 'reuniao', rotulo: 'Reuniões', icone: '🤝', total: totaisTipo.reuniao },
+                ]}
+              />
+            </div>
 
             <div role="tablist" className="mb-5 flex gap-1 overflow-x-auto rounded-xl bg-slate-200/60 p-1">
               {abas.map((aba) => {
@@ -526,9 +747,7 @@ export default function AgendamentoGravacoes() {
                     {aba.rotulo}
                     <span
                       className={`rounded-full px-1.5 text-xs tabular-nums ${
-                        aba.id === 'atencao' && aba.total > 0
-                          ? 'bg-rose-100 text-rose-700'
-                          : 'bg-slate-100 text-slate-500'
+                        aba.id === 'atencao' && aba.total > 0 ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-500'
                       }`}
                     >
                       {aba.total}
@@ -547,21 +766,23 @@ export default function AgendamentoGravacoes() {
             ) : erroLista ? (
               <div className="rounded-2xl bg-white p-6 text-sm ring-1 ring-rose-200">
                 <p className="text-rose-700">{erroLista}</p>
-                <button
-                  type="button"
-                  onClick={carregar}
-                  className="mt-3 font-medium text-violet-700 hover:text-violet-900"
-                >
+                <button type="button" onClick={carregar} className="mt-3 font-medium text-violet-700 hover:text-violet-900">
                   Carregar de novo
                 </button>
               </div>
             ) : grupos.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-slate-300 px-6 py-12 text-center">
                 <p className="font-medium text-slate-700">
-                  {filtro === 'atencao' ? 'Nenhuma gravação precisa de reagendamento.' : 'Nenhuma gravação na agenda.'}
+                  {filtro === 'atencao'
+                    ? 'Nada precisa de reagendamento.'
+                    : filtroTipo === 'reuniao'
+                      ? 'Nenhuma reunião na agenda.'
+                      : filtroTipo === 'gravacao'
+                        ? 'Nenhuma gravação na agenda.'
+                        : 'Nenhum agendamento na agenda.'}
                 </p>
                 {filtro !== 'atencao' && (
-                  <p className="mt-1 text-sm text-slate-500">Use o formulário ao lado para agendar a primeira.</p>
+                  <p className="mt-1 text-sm text-slate-500">Use o formulário ao lado para agendar.</p>
                 )}
               </div>
             ) : (
@@ -571,7 +792,7 @@ export default function AgendamentoGravacoes() {
                     <h3 className="mb-2 flex items-baseline gap-2 px-1 text-sm font-semibold text-slate-900">
                       {g.rotulo}
                       <span className="text-xs font-normal text-slate-500">
-                        {g.itens.length} {g.itens.length === 1 ? 'gravação' : 'gravações'}
+                        {g.itens.length} {g.itens.length === 1 ? 'agendamento' : 'agendamentos'}
                       </span>
                     </h3>
                     <ul className="divide-y divide-slate-100 overflow-hidden rounded-2xl bg-white ring-1 ring-slate-200">

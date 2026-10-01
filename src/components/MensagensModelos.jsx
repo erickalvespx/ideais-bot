@@ -1,8 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 
-// Dados fictícios só para a prévia
-const EXEMPLO = {
+const TIPOS = [
+  { valor: 'gravacao', rotulo: 'Gravação', icone: '🎬' },
+  { valor: 'reuniao', rotulo: 'Reunião', icone: '🤝' },
+];
+
+// Dados fictícios só para a prévia (por tipo)
+const EXEMPLO_BASE = {
   primeiro_nome: 'Maria',
   nome_cliente: 'Maria Souza',
   dia: 'amanhã, terça-feira (29/09)',
@@ -11,16 +16,35 @@ const EXEMPLO = {
   prazo: '16:30',
   agencia: 'Ideais Agência',
 };
+const EXEMPLOS = {
+  gravacao: { ...EXEMPLO_BASE, tipo: 'gravação', modalidade: '', local: 'Estúdio Ideais', link: '', onde: '📍 Local: Estúdio Ideais' },
+  reuniao: {
+    ...EXEMPLO_BASE,
+    tipo: 'reunião',
+    modalidade: 'online',
+    local: '',
+    link: 'https://meet.google.com/abc-defg-hij',
+    onde: '💻 Link: https://meet.google.com/abc-defg-hij',
+  },
+};
+const VARIAVEIS = Object.keys(EXEMPLOS.gravacao);
 
 const DESCRICAO_VARIAVEL = {
   primeiro_nome: 'Primeiro nome do cliente',
   nome_cliente: 'Nome completo do cliente',
   dia: 'Dia por extenso (hoje, amanhã…)',
   data: 'Data curta (dd/mm)',
-  hora: 'Horário da gravação',
+  hora: 'Horário marcado',
   prazo: 'Limite para responder',
   agencia: 'Nome da agência',
+  tipo: '"gravação" ou "reunião"',
+  modalidade: '"presencial" ou "online" (reuniões)',
+  local: 'Local informado no agendamento',
+  link: 'Link da reunião online',
+  onde: 'Local ou link já formatado; some se não houver',
 };
+
+const chaveDe = (tipo, chave) => `${tipo}:${chave}`;
 
 const LIMITE = 1000;
 const fmtDataHora = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
@@ -29,7 +53,7 @@ function validar(chave, texto) {
   const t = texto.trim();
   if (!t) return 'A mensagem não pode ficar vazia.';
   if (t.length > LIMITE) return `A mensagem passou de ${LIMITE} caracteres.`;
-  const desconhecida = [...t.matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map((m) => m[1]).find((v) => !(v in EXEMPLO));
+  const desconhecida = [...t.matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map((m) => m[1]).find((v) => !VARIAVEIS.includes(v));
   if (desconhecida) return `A variável {{${desconhecida}}} não existe. Use os botões abaixo do texto.`;
   if (chave === 'confirmacao') {
     if (!/(^|[^0-9])1([^0-9]|$)/.test(t)) return 'Peça para o cliente responder 1, senão o bot não reconhece a confirmação.';
@@ -42,11 +66,23 @@ function escapar(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/** Remove linhas formadas só por variáveis vazias (mesma regra do bot) */
+function removerLinhasVazias(texto, exemplo) {
+  return texto
+    .split('\n')
+    .filter((linha) => {
+      const vars = [...linha.matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map((m) => m[1]);
+      const resto = linha.replace(/\{\{\s*\w+\s*\}\}/g, '').trim();
+      return !(vars.length && !resto && vars.every((k) => k in exemplo && !exemplo[k]));
+    })
+    .join('\n');
+}
+
 /** Converte o texto em HTML no estilo WhatsApp (*negrito*, _itálico_, ~riscado~) */
-function renderizarPrevia(texto) {
-  return escapar(texto)
+function renderizarPrevia(texto, exemplo) {
+  return escapar(removerLinhasVazias(texto, exemplo))
     .replace(/\{\{\s*(\w+)\s*\}\}/g, (inteiro, v) =>
-      v in EXEMPLO ? escapar(EXEMPLO[v]) : `<mark class="rounded bg-rose-100 px-0.5 text-rose-700">${inteiro}</mark>`
+      v in exemplo ? escapar(exemplo[v]) : `<mark class="rounded bg-rose-100 px-0.5 text-rose-700">${inteiro}</mark>`
     )
     .replace(/\*([^*\n]+)\*/g, '<strong class="font-semibold">$1</strong>')
     .replace(/(^|[\s(])_([^_\n]+)_/g, '$1<em>$2</em>')
@@ -64,7 +100,8 @@ function traduzirErro(error) {
 
 export default function MensagensModelos() {
   const [modelos, setModelos] = useState([]);
-  const [rascunhos, setRascunhos] = useState({}); // { chave: { conteudo, ativo } }
+  const [rascunhos, setRascunhos] = useState({}); // { "tipo:chave": { conteudo, ativo } }
+  const [tipo, setTipo] = useState('gravacao');
   const [selecionada, setSelecionada] = useState('confirmacao');
   const [carregando, setCarregando] = useState(true);
   const [erroCarga, setErroCarga] = useState(null);
@@ -78,12 +115,13 @@ export default function MensagensModelos() {
     setErroCarga(null);
     const { data, error } = await supabase
       .from('mensagem_modelos')
-      .select('chave, ordem, titulo, quando, obrigatoria, conteudo, conteudo_padrao, ativo, atualizado_em')
+      .select('tipo, chave, ordem, titulo, quando, obrigatoria, conteudo, conteudo_padrao, ativo, atualizado_em')
+      .order('tipo')
       .order('ordem');
     if (error) setErroCarga(error.message);
     else {
       setModelos(data);
-      setRascunhos(Object.fromEntries(data.map((m) => [m.chave, { conteudo: m.conteudo, ativo: m.ativo }])));
+      setRascunhos(Object.fromEntries(data.map((m) => [chaveDe(m.tipo, m.chave), { conteudo: m.conteudo, ativo: m.ativo }])));
     }
     setCarregando(false);
   }, []);
@@ -92,13 +130,18 @@ export default function MensagensModelos() {
     carregar();
   }, [carregar]);
 
-  const modelo = modelos.find((m) => m.chave === selecionada);
-  const rascunho = rascunhos[selecionada] ?? { conteudo: '', ativo: true };
-  const alterado = (m) =>
-    m && rascunhos[m.chave] && (rascunhos[m.chave].conteudo !== m.conteudo || rascunhos[m.chave].ativo !== m.ativo);
+  const atual = chaveDe(tipo, selecionada);
+  const doTipo = modelos.filter((m) => m.tipo === tipo);
+  const modelo = doTipo.find((m) => m.chave === selecionada);
+  const rascunho = rascunhos[atual] ?? { conteudo: '', ativo: true };
+  const alterado = (m) => {
+    const r = m && rascunhos[chaveDe(m.tipo, m.chave)];
+    return Boolean(r && (r.conteudo !== m.conteudo || r.ativo !== m.ativo));
+  };
+  const alteradosNoTipo = (t) => modelos.some((m) => m.tipo === t && alterado(m));
 
   const erroValidacao = useMemo(() => validar(selecionada, rascunho.conteudo), [selecionada, rascunho.conteudo]);
-  const previa = useMemo(() => renderizarPrevia(rascunho.conteudo), [rascunho.conteudo]);
+  const previa = useMemo(() => renderizarPrevia(rascunho.conteudo, EXEMPLOS[tipo]), [rascunho.conteudo, tipo]);
 
   // histórico da mensagem aberta
   useEffect(() => {
@@ -107,6 +150,7 @@ export default function MensagensModelos() {
     supabase
       .from('mensagem_modelos_historico')
       .select('id, conteudo, ativo, alterado_em')
+      .eq('tipo', tipo)
       .eq('chave', selecionada)
       .order('alterado_em', { ascending: false })
       .limit(15)
@@ -114,11 +158,11 @@ export default function MensagensModelos() {
     return () => {
       ativo = false;
     };
-  }, [verHistorico, selecionada, modelos]);
+  }, [verHistorico, tipo, selecionada, modelos]);
 
   function editar(campos) {
     setAviso(null);
-    setRascunhos((r) => ({ ...r, [selecionada]: { ...r[selecionada], ...campos } }));
+    setRascunhos((r) => ({ ...r, [atual]: { ...r[atual], ...campos } }));
   }
 
   function inserirVariavel(v) {
@@ -143,8 +187,9 @@ export default function MensagensModelos() {
     const { data, error } = await supabase
       .from('mensagem_modelos')
       .update({ conteudo: rascunho.conteudo.trim(), ativo: rascunho.ativo })
+      .eq('tipo', tipo)
       .eq('chave', selecionada)
-      .select('chave, ordem, titulo, quando, obrigatoria, conteudo, conteudo_padrao, ativo, atualizado_em')
+      .select('tipo, chave, ordem, titulo, quando, obrigatoria, conteudo, conteudo_padrao, ativo, atualizado_em')
       .single();
     setSalvando(false);
 
@@ -152,13 +197,18 @@ export default function MensagensModelos() {
       setAviso({ tipo: 'erro', texto: traduzirErro(error) });
       return;
     }
-    setModelos((lista) => lista.map((m) => (m.chave === data.chave ? data : m)));
-    setRascunhos((r) => ({ ...r, [data.chave]: { conteudo: data.conteudo, ativo: data.ativo } }));
+    setModelos((lista) => lista.map((m) => (m.tipo === data.tipo && m.chave === data.chave ? data : m)));
+    setRascunhos((r) => ({ ...r, [chaveDe(data.tipo, data.chave)]: { conteudo: data.conteudo, ativo: data.ativo } }));
     setAviso({ tipo: 'ok', texto: 'Mensagem salva. O bot usa o novo texto a partir dos próximos envios.' });
   }
 
   function trocar(chave) {
     setSelecionada(chave);
+    setAviso(null);
+  }
+
+  function trocarTipo(novo) {
+    setTipo(novo);
     setAviso(null);
   }
 
@@ -190,20 +240,44 @@ export default function MensagensModelos() {
       <header className="mb-8 max-w-2xl">
         <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Mensagens do WhatsApp</h1>
         <p className="mt-2 text-sm leading-6 text-slate-600">
-          Os textos que o bot envia aos clientes. As alterações valem a partir dos próximos envios, sem precisar
-          publicar nada.
+          Os textos que o bot envia aos clientes, separados por tipo de agendamento. As alterações valem a partir dos
+          próximos envios, sem precisar publicar nada.
         </p>
       </header>
+
+      <div role="radiogroup" aria-label="Tipo de agendamento" className="mb-6 inline-flex rounded-lg bg-slate-100 p-1">
+        {TIPOS.map((t) => {
+          const ativo = t.valor === tipo;
+          return (
+            <button
+              key={t.valor}
+              type="button"
+              role="radio"
+              aria-checked={ativo}
+              onClick={() => trocarTipo(t.valor)}
+              className={`relative flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-medium transition focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${
+                ativo ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <span aria-hidden="true">{t.icone}</span>
+              {t.rotulo}
+              {alteradosNoTipo(t.valor) && (
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-500" title="Alterações não salvas" />
+              )}
+            </button>
+          );
+        })}
+      </div>
 
       <div className="grid items-start gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
         {/* lista */}
         <nav aria-label="Mensagens" className="overflow-hidden rounded-2xl bg-white ring-1 ring-slate-200">
           <ul className="divide-y divide-slate-100">
-            {modelos.map((m) => {
+            {doTipo.map((m) => {
               const ativa = m.chave === selecionada;
-              const desligada = !(rascunhos[m.chave]?.ativo ?? m.ativo);
+              const desligada = !(rascunhos[chaveDe(m.tipo, m.chave)]?.ativo ?? m.ativo);
               return (
-                <li key={m.chave}>
+                <li key={chaveDe(m.tipo, m.chave)}>
                   <button
                     type="button"
                     onClick={() => trocar(m.chave)}
@@ -295,7 +369,7 @@ export default function MensagensModelos() {
 
                 <p className="mt-4 text-sm font-medium text-slate-700">Inserir informação do agendamento</p>
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  {Object.keys(EXEMPLO).map((v) => (
+                  {VARIAVEIS.map((v) => (
                     <button
                       key={v}
                       type="button"
@@ -321,7 +395,9 @@ export default function MensagensModelos() {
                     <p className="mt-1 text-right text-[11px] text-[#667781]">09:41</p>
                   </div>
                 </div>
-                <p className="mt-2 text-xs text-slate-500">Prévia com dados fictícios de exemplo.</p>
+                <p className="mt-2 text-xs text-slate-500">
+                  Prévia com dados fictícios{tipo === 'reuniao' ? ' (reunião online)' : ''}. Linhas só com variáveis vazias, como {'{{onde}}'} sem local, não aparecem para o cliente.
+                </p>
               </div>
             </div>
 

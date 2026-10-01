@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from './lib/supabase';
 import Login from './components/Login';
 import Marca from './components/Marca';
-import AgendamentoGravacoes from './components/AgendamentoGravacoes';
+import Agenda from './components/Agenda';
 import MensagensModelos from './components/MensagensModelos';
 import MenuUsuario from './components/MenuUsuario';
 
@@ -86,7 +86,7 @@ export default function App() {
         </div>
       </header>
 
-      {pagina === 'mensagens' && gestor ? <MensagensModelos /> : <AgendamentoGravacoes />}
+      {pagina === 'mensagens' && gestor ? <MensagensModelos /> : <Agenda />}
     </div>
   );
 }
