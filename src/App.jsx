@@ -86,7 +86,7 @@ export default function App() {
         </div>
       </header>
 
-      {pagina === 'mensagens' && gestor ? <MensagensModelos /> : <Agenda />}
+      {pagina === 'mensagens' && gestor ? <MensagensModelos /> : <Agenda usuarioId={sessao.user.id} versaoEquipe={nome} />}
     </div>
   );
 }

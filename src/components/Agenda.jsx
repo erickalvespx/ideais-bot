@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import ClienteBusca from './ClienteBusca';
 
 // ------------------------------------------------------------------ constantes
 
@@ -31,6 +32,7 @@ const FORM_VAZIO = {
   local: '',
   link: '',
   observacoes: '',
+  responsavelId: '',
 };
 
 // ------------------------------------------------------------------ helpers
@@ -107,6 +109,15 @@ function mesclar(lista, registro) {
 
 const tipoDe = (ag) => (ag?.tipo === 'reuniao' ? 'reuniao' : 'gravacao');
 
+function iniciais(nome) {
+  const p = String(nome ?? '').trim().split(/\s+/).filter(Boolean);
+  if (!p.length || nome === 'Sem nome') return '?';
+  return (p[0][0] + (p.length > 1 ? p[p.length - 1][0] : '')).toUpperCase();
+}
+
+const primeiroNome = (nome) => String(nome ?? '').trim().split(/\s+/)[0] || 'equipe';
+const linkWhatsApp = (telefone) => `https://wa.me/${somenteDigitos(telefone)}`;
+
 // ------------------------------------------------------------------ subcomponentes
 
 function Etiqueta({ status }) {
@@ -158,11 +169,16 @@ function Segmentado({ opcoes, valor, onChange, rotulo, tamanho = 'md' }) {
 }
 
 /** Andamento do fluxo automático: é uma sequência real, por isso a trilha */
-function Trilha({ ag }) {
+function Trilha({ ag, nomeDe }) {
+  const rotuloConfirmado = !ag.confirmado_em
+    ? 'Confirmado'
+    : ag.confirmado_por
+      ? `Confirmado por ${primeiroNome(nomeDe(ag.confirmado_por))}`
+      : 'Confirmado pelo cliente';
   const etapas = [
     { rotulo: 'Agendado', em: ag.created_at },
     { rotulo: 'Pedido enviado', em: ag.confirmacao_enviada_em },
-    { rotulo: 'Confirmado', em: ag.confirmado_em },
+    { rotulo: rotuloConfirmado, em: ag.confirmado_em },
     { rotulo: 'Lembrete enviado', em: ag.lembrete_enviado_em },
   ];
   const interrompido = !ATIVOS.has(ag.status);
@@ -181,6 +197,7 @@ function Trilha({ ag }) {
               }`}
             />
             <p
+              title={feito && i > 0 ? `${e.rotulo} às ${hora(e.em)}` : e.rotulo}
               className={`mt-1 truncate text-[11px] leading-4 ${
                 feito ? 'text-slate-600' : parouAqui ? 'text-rose-600' : 'text-slate-400'
               }`}
@@ -229,12 +246,43 @@ function Onde({ ag }) {
   return null;
 }
 
-function LinhaAgendamento({ ag, agora, onCancelar, onReagendar, ocupado }) {
+function Acao({ icone, rotulo, onClick, href, perigo = false, destaque = false, disabled = false }) {
+  const classe = `inline-flex items-center gap-1.5 rounded px-1 py-0.5 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:opacity-50 ${
+    perigo ? 'text-slate-500 hover:text-rose-700' : destaque ? 'font-medium text-violet-700 hover:text-violet-900' : 'text-slate-600 hover:text-slate-900'
+  }`;
+  const conteudo = (
+    <>
+      <span aria-hidden="true">{icone}</span>
+      <span className="hidden sm:inline">{rotulo}</span>
+    </>
+  );
+  if (href) {
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer" className={classe} title={rotulo} aria-label={rotulo}>
+        {conteudo}
+      </a>
+    );
+  }
+  return (
+    <button type="button" onClick={onClick} disabled={disabled} className={classe} title={rotulo} aria-label={rotulo}>
+      {conteudo}
+    </button>
+  );
+}
+
+function LinhaAgendamento({ ag, agora, nomeDe, emEdicao, ocupado, onCancelar, onReagendar, onEditar, onConfirmar, onCopiar }) {
   const passou = new Date(ag.data_gravacao) < agora;
   const tipo = TIPOS[tipoDe(ag)];
+  const futuroAtivo = ATIVOS.has(ag.status) && !passou;
+  const podeConfirmar = futuroAtivo && ag.status !== 'confirmado';
+  const responsavel = ag.responsavel_id ? nomeDe(ag.responsavel_id) : null;
 
   return (
-    <li className={`px-4 py-4 sm:px-5 ${passou && ATIVOS.has(ag.status) ? 'opacity-60' : ''}`}>
+    <li
+      className={`px-4 py-4 sm:px-5 ${passou && ATIVOS.has(ag.status) ? 'opacity-60' : ''} ${
+        emEdicao ? 'bg-violet-50/60' : ''
+      }`}
+    >
       <div className="flex gap-4">
         <time
           dateTime={ag.data_gravacao}
@@ -255,6 +303,17 @@ function LinhaAgendamento({ ag, agora, onCancelar, onReagendar, ocupado }) {
             <Etiqueta status={ag.status} />
           </div>
 
+          <p className="mt-1.5 flex items-center gap-1.5 text-sm text-slate-600">
+            <span
+              aria-hidden="true"
+              className={`grid h-5 w-5 shrink-0 place-items-center rounded-full text-[10px] font-semibold ${
+                responsavel ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-400'
+              }`}
+            >
+              {responsavel ? iniciais(responsavel) : '?'}
+            </span>
+            {responsavel ?? <span className="text-slate-400">Sem responsável</span>}
+          </p>
           <Onde ag={ag} />
           {ag.observacoes && <p className="mt-2 text-sm text-slate-600">{ag.observacoes}</p>}
 
@@ -270,31 +329,20 @@ function LinhaAgendamento({ ag, agora, onCancelar, onReagendar, ocupado }) {
             </p>
           )}
 
-          <Trilha ag={ag} />
+          <Trilha ag={ag} nomeDe={nomeDe} />
 
-          {(ATIVOS.has(ag.status) && !passou) || REAGENDAVEL.has(ag.status) ? (
-            <div className="mt-3 flex gap-4 text-sm">
-              {REAGENDAVEL.has(ag.status) && (
-                <button
-                  type="button"
-                  onClick={() => onReagendar(ag)}
-                  className="rounded font-medium text-violet-700 hover:text-violet-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
-                >
-                  Reagendar
-                </button>
-              )}
-              {ATIVOS.has(ag.status) && !passou && (
-                <button
-                  type="button"
-                  disabled={ocupado}
-                  onClick={() => onCancelar(ag)}
-                  className="rounded text-slate-500 hover:text-rose-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 disabled:opacity-50"
-                >
-                  Cancelar {tipo.rotulo.toLowerCase()}
-                </button>
-              )}
-            </div>
-          ) : null}
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1">
+            {futuroAtivo && <Acao icone="✏️" rotulo="Editar" onClick={() => onEditar(ag)} />}
+            <Acao icone="💬" rotulo="Abrir no WhatsApp" href={linkWhatsApp(ag.telefone)} />
+            {ag.modalidade === 'online' && ag.link && <Acao icone="🔗" rotulo="Copiar link" onClick={() => onCopiar(ag)} />}
+            {podeConfirmar && (
+              <Acao icone="✅" rotulo="Marcar como confirmado" destaque disabled={ocupado} onClick={() => onConfirmar(ag)} />
+            )}
+            {REAGENDAVEL.has(ag.status) && <Acao icone="🔁" rotulo="Reagendar" destaque onClick={() => onReagendar(ag)} />}
+            {futuroAtivo && (
+              <Acao icone="✕" rotulo={`Cancelar ${tipo.rotulo.toLowerCase()}`} perigo disabled={ocupado} onClick={() => onCancelar(ag)} />
+            )}
+          </div>
         </div>
       </div>
     </li>
@@ -303,8 +351,17 @@ function LinhaAgendamento({ ag, agora, onCancelar, onReagendar, ocupado }) {
 
 // ------------------------------------------------------------------ componente principal
 
-export default function Agenda() {
-  const [form, setForm] = useState(FORM_VAZIO);
+export default function Agenda({ usuarioId, versaoEquipe }) {
+  const formNovo = useCallback(
+    (extra = {}) => ({ ...FORM_VAZIO, responsavelId: usuarioId ?? '', ...extra }),
+    [usuarioId]
+  );
+  const [form, setForm] = useState(() => formNovo());
+  const [editando, setEditando] = useState(null); // agendamento original em edição
+  const [equipe, setEquipe] = useState([]);
+  const [quem, setQuem] = useState('todos');
+  const [ocupadoId, setOcupadoId] = useState(null);
+  const [toast, setToast] = useState(null);
   const [erros, setErros] = useState({});
   const [salvando, setSalvando] = useState(false);
   const [aviso, setAviso] = useState(null); // { tipo: 'ok' | 'erro' | 'info', texto }
@@ -314,7 +371,6 @@ export default function Agenda() {
   const [erroLista, setErroLista] = useState(null);
   const [filtro, setFiltro] = useState('proximas');
   const [filtroTipo, setFiltroTipo] = useState('todos');
-  const [cancelandoId, setCancelandoId] = useState(null);
   const [agora, setAgora] = useState(() => new Date());
 
   const campoDataRef = useRef(null);
@@ -323,6 +379,12 @@ export default function Agenda() {
   const ehReuniao = form.tipo === 'reuniao';
   const ehOnline = ehReuniao && form.modalidade === 'online';
   const nomeTipo = TIPOS[form.tipo].rotulo.toLowerCase();
+
+  // em edição: mudar data ou telefone reinicia o fluxo do WhatsApp
+  const dataMudou = Boolean(editando) && form.dataHora !== paraInputLocal(new Date(editando.data_gravacao));
+  const telefoneMudou =
+    Boolean(editando) && `55${somenteDigitos(form.telefone)}` !== somenteDigitos(editando.telefone);
+  const reiniciaFluxo = dataMudou || telefoneMudou;
 
   // relógio da tela (agrupa "Hoje/Amanhã" e esmaece o que já passou)
   useEffect(() => {
@@ -345,6 +407,19 @@ export default function Agenda() {
     setCarregando(false);
   }, []);
 
+  // equipe pelo nome (para "Responsável" e "Confirmado por…")
+  useEffect(() => {
+    supabase.rpc('listar_equipe').then(({ data }) => setEquipe(data ?? []));
+  }, [versaoEquipe]);
+
+  const nomeDe = useCallback((id) => equipe.find((p) => p.user_id === id)?.nome ?? 'Sem nome', [equipe]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
   // carga inicial + realtime (o bot muda status e a tela acompanha)
   useEffect(() => {
     carregar();
@@ -363,9 +438,14 @@ export default function Agenda() {
 
   // ---------------------------------------------------------------- filtros
 
+  const daPessoa = useMemo(
+    () => (quem === 'eu' ? agendamentos.filter((a) => a.responsavel_id === usuarioId) : agendamentos),
+    [agendamentos, quem, usuarioId]
+  );
+
   const doTipo = useMemo(
-    () => (filtroTipo === 'todos' ? agendamentos : agendamentos.filter((a) => tipoDe(a) === filtroTipo)),
-    [agendamentos, filtroTipo]
+    () => (filtroTipo === 'todos' ? daPessoa : daPessoa.filter((a) => tipoDe(a) === filtroTipo)),
+    [daPessoa, filtroTipo]
   );
 
   const listas = useMemo(() => {
@@ -379,7 +459,7 @@ export default function Agenda() {
 
   const totaisTipo = useMemo(() => {
     const limiteProximas = agora.getTime() - UMA_HORA;
-    const base = agendamentos.filter(
+    const base = daPessoa.filter(
       (a) => ATIVOS.has(a.status) && new Date(a.data_gravacao).getTime() >= limiteProximas
     );
     return {
@@ -387,7 +467,7 @@ export default function Agenda() {
       gravacao: base.filter((a) => tipoDe(a) === 'gravacao').length,
       reuniao: base.filter((a) => tipoDe(a) === 'reuniao').length,
     };
-  }, [agendamentos, agora]);
+  }, [daPessoa, agora]);
 
   const grupos = useMemo(() => {
     const mapa = new Map();
@@ -421,7 +501,7 @@ export default function Agenda() {
     if (nome.length < 2) novo.nome = 'Informe o nome do cliente.';
     if (!telefoneValido(digitos)) novo.telefone = 'Use DDD + número, ex. (88) 99999-9999.';
     if (!form.dataHora) novo.dataHora = 'Escolha o dia e o horário.';
-    else if (new Date(form.dataHora) <= new Date()) novo.dataHora = 'Escolha um horário no futuro.';
+    else if ((!editando || dataMudou) && new Date(form.dataHora) <= new Date()) novo.dataHora = 'Escolha um horário no futuro.';
 
     if (ehOnline) {
       const link = normalizarLink(form.link);
@@ -448,28 +528,102 @@ export default function Agenda() {
       modalidade: ehReuniao ? form.modalidade : null,
       local: ehOnline ? null : local || null,
       link: ehOnline ? normalizarLink(form.link) : null,
+      responsavel_id: form.responsavelId || null,
     };
 
     setSalvando(true);
-    const { data, error } = await supabase.from('agendamentos').insert(registro).select().single();
+    let resposta;
+    if (editando) {
+      // só envia data/telefone se mudaram: são eles que reiniciam o fluxo no WhatsApp
+      if (!dataMudou) delete registro.data_gravacao;
+      if (!telefoneMudou) delete registro.telefone;
+      resposta = await supabase.from('agendamentos').update(registro).eq('id', editando.id).select().single();
+    } else {
+      resposta = await supabase.from('agendamentos').insert(registro).select().single();
+    }
     setSalvando(false);
 
+    const { data, error } = resposta;
     if (error) {
       setAviso({ tipo: 'erro', texto: traduzirErro(error) });
       return;
     }
 
     setAgendamentos((atual) => mesclar(atual, data));
-    setAviso({
-      tipo: 'ok',
-      texto: `${TIPOS[tipoDe(data)].rotulo} com ${data.cliente_nome} agendada para ${descreverQuando(data.data_gravacao, new Date())}.`,
-    });
-    setForm((f) => ({ ...FORM_VAZIO, tipo: f.tipo, modalidade: f.modalidade }));
+    if (editando) {
+      setAviso({
+        tipo: 'ok',
+        texto: reiniciaFluxo
+          ? `Alterações salvas. ${data.cliente_nome} vai receber um novo pedido de confirmação.`
+          : 'Alterações salvas. Nada foi reenviado ao cliente.',
+      });
+      setEditando(null);
+      setForm(formNovo());
+    } else {
+      setAviso({
+        tipo: 'ok',
+        texto: `${TIPOS[tipoDe(data)].rotulo} com ${data.cliente_nome} agendada para ${descreverQuando(data.data_gravacao, new Date())}.`,
+      });
+      setForm((f) => formNovo({ tipo: f.tipo, modalidade: f.modalidade }));
+    }
     setFiltro('proximas');
     campoNomeRef.current?.focus();
   }
 
+  function editar(ag) {
+    setEditando(ag);
+    setForm({
+      tipo: tipoDe(ag),
+      nome: ag.cliente_nome,
+      telefone: exibirTelefone(ag.telefone),
+      dataHora: paraInputLocal(new Date(ag.data_gravacao)),
+      modalidade: ag.modalidade ?? 'presencial',
+      local: ag.local ?? '',
+      link: ag.link ?? '',
+      observacoes: ag.observacoes ?? '',
+      responsavelId: ag.responsavel_id ?? '',
+    });
+    setErros({});
+    setAviso(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setTimeout(() => campoNomeRef.current?.focus(), 250);
+  }
+
+  function cancelarEdicao() {
+    setEditando(null);
+    setForm(formNovo());
+    setErros({});
+    setAviso(null);
+  }
+
+  async function confirmarManual(ag) {
+    const ok = window.confirm(
+      `Marcar ${TIPOS[tipoDe(ag)].artigo} com ${ag.cliente_nome} como confirmada?\n\nUse quando o cliente confirmou por ligação ou pessoalmente. O horário não será liberado e o lembrete de 1h continua saindo.`
+    );
+    if (!ok) return;
+    setOcupadoId(ag.id);
+    const { data, error } = await supabase.rpc('confirmar_manualmente', { p_id: ag.id });
+    setOcupadoId(null);
+    const linha = Array.isArray(data) ? data[0] : data;
+    if (error || !linha) {
+      setToast({ tipo: 'erro', texto: error ? traduzirErro(error) : 'Esse agendamento não pode mais ser confirmado.' });
+      return;
+    }
+    setAgendamentos((atual) => mesclar(atual, linha));
+    setToast({ tipo: 'ok', texto: `${ag.cliente_nome} marcado como confirmado.` });
+  }
+
+  async function copiarLink(ag) {
+    try {
+      await navigator.clipboard.writeText(ag.link);
+      setToast({ tipo: 'ok', texto: 'Link da reunião copiado.' });
+    } catch {
+      setToast({ tipo: 'erro', texto: 'Não foi possível copiar. Selecione o link e copie manualmente.' });
+    }
+  }
+
   function reagendar(ag) {
+    setEditando(null);
     setForm({
       tipo: tipoDe(ag),
       nome: ag.cliente_nome,
@@ -479,6 +633,7 @@ export default function Agenda() {
       local: ag.local ?? '',
       link: ag.link ?? '',
       observacoes: ag.observacoes ?? '',
+      responsavelId: ag.responsavel_id ?? usuarioId ?? '',
     });
     setErros({});
     setAviso({ tipo: 'info', texto: `Escolha a nova data para ${ag.cliente_nome}.` });
@@ -492,14 +647,14 @@ export default function Agenda() {
     );
     if (!ok) return;
 
-    setCancelandoId(ag.id);
+    setOcupadoId(ag.id);
     const { data, error } = await supabase
       .from('agendamentos')
       .update({ status: 'cancelado_pela_agencia' })
       .eq('id', ag.id)
       .select()
       .single();
-    setCancelandoId(null);
+    setOcupadoId(null);
 
     if (error) setAviso({ tipo: 'erro', texto: traduzirErro(error) });
     else setAgendamentos((atual) => mesclar(atual, data));
@@ -540,7 +695,22 @@ export default function Agenda() {
         <div className="grid items-start gap-8 lg:grid-cols-[360px_minmax(0,1fr)]">
           {/* ------------------------------------------------ formulário */}
           <section className="rounded-2xl bg-white p-5 ring-1 ring-slate-200 sm:p-6 lg:sticky lg:top-8">
-            <h2 className="text-base font-semibold">Novo agendamento</h2>
+            {editando && (
+              <div className="mb-4 flex items-start justify-between gap-3 rounded-lg bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+                <span>
+                  Editando <strong className="font-semibold">{editando.cliente_nome}</strong>,{' '}
+                  {descreverQuando(editando.data_gravacao, agora)}
+                </span>
+                <button
+                  type="button"
+                  onClick={cancelarEdicao}
+                  className="shrink-0 rounded font-medium text-amber-900 underline underline-offset-2 hover:no-underline focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                >
+                  Sair
+                </button>
+              </div>
+            )}
+            <h2 className="text-base font-semibold">{editando ? 'Editar agendamento' : 'Novo agendamento'}</h2>
 
             <form onSubmit={salvar} noValidate className="mt-5 space-y-5">
               <div>
@@ -560,17 +730,21 @@ export default function Agenda() {
                 <label htmlFor="nome" className="block text-sm font-medium text-slate-700">
                   Nome do cliente
                 </label>
-                <input
+                <ClienteBusca
                   id="nome"
-                  ref={campoNomeRef}
-                  type="text"
-                  autoComplete="off"
-                  maxLength={120}
+                  inputRef={campoNomeRef}
                   value={form.nome}
-                  onChange={alterar('nome')}
-                  placeholder="Ex.: Clínica Sorriso Sobral"
-                  aria-invalid={Boolean(erros.nome)}
-                  aria-describedby={erros.nome ? 'erro-nome' : undefined}
+                  onChange={(v) => {
+                    setForm((f) => ({ ...f, nome: v }));
+                    setErros((er) => ({ ...er, nome: undefined }));
+                  }}
+                  onEscolher={(c) => {
+                    setForm((f) => ({ ...f, nome: c.cliente_nome, telefone: exibirTelefone(c.telefone) }));
+                    setErros((er) => ({ ...er, nome: undefined, telefone: undefined }));
+                  }}
+                  placeholder="Digite para buscar ou cadastrar"
+                  invalido={Boolean(erros.nome)}
+                  describedBy={erros.nome ? 'erro-nome' : undefined}
                   className={`${inputBase} ${anel('nome')}`}
                 />
                 {erros.nome && <p id="erro-nome" className="mt-1.5 text-sm text-rose-600">{erros.nome}</p>}
@@ -615,6 +789,26 @@ export default function Agenda() {
                 ) : (
                   <p id="dica-horario" className="mt-1.5 text-xs leading-5 text-slate-500">{dicaHorario}</p>
                 )}
+              </div>
+
+              <div>
+                <label htmlFor="responsavel" className="block text-sm font-medium text-slate-700">
+                  Responsável
+                </label>
+                <select
+                  id="responsavel"
+                  value={form.responsavelId}
+                  onChange={alterar('responsavelId')}
+                  className={`${inputBase} ring-slate-300`}
+                >
+                  <option value="">Sem responsável</option>
+                  {equipe.map((p) => (
+                    <option key={p.user_id} value={p.user_id}>
+                      {p.nome}
+                      {p.user_id === usuarioId ? ' (você)' : ''}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               {ehReuniao && (
@@ -687,6 +881,18 @@ export default function Agenda() {
                 />
               </div>
 
+              {editando && (
+                <p
+                  className={`rounded-lg px-3 py-2.5 text-sm ${
+                    reiniciaFluxo ? 'bg-amber-50 text-amber-900' : 'bg-slate-50 text-slate-600'
+                  }`}
+                >
+                  {reiniciaFluxo
+                    ? `Você mudou ${dataMudou && telefoneMudou ? 'o horário e o telefone' : dataMudou ? 'o horário' : 'o telefone'}: o cliente vai receber um novo pedido de confirmação.`
+                    : 'Essas alterações não enviam nenhuma mensagem ao cliente.'}
+                </p>
+              )}
+
               {aviso && (
                 <p
                   role={aviso.tipo === 'erro' ? 'alert' : 'status'}
@@ -707,8 +913,17 @@ export default function Agenda() {
                 disabled={salvando}
                 className="w-full rounded-lg bg-linear-to-r from-blue-600 to-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {salvando ? 'Agendando…' : `Agendar ${nomeTipo}`}
+                {salvando ? 'Salvando…' : editando ? 'Salvar alterações' : `Agendar ${nomeTipo}`}
               </button>
+              {editando && (
+                <button
+                  type="button"
+                  onClick={cancelarEdicao}
+                  className="w-full rounded-lg px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
+                >
+                  Cancelar edição
+                </button>
+              )}
             </form>
           </section>
 
@@ -716,7 +931,17 @@ export default function Agenda() {
           <section aria-labelledby="titulo-agenda" className="min-w-0">
             <h2 id="titulo-agenda" className="sr-only">Agendamentos</h2>
 
-            <div className="mb-3">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <Segmentado
+                rotulo="Filtrar por responsável"
+                tamanho="sm"
+                valor={quem}
+                onChange={setQuem}
+                opcoes={[
+                  { valor: 'todos', rotulo: 'Toda a equipe' },
+                  { valor: 'eu', rotulo: 'Minha agenda' },
+                ]}
+              />
               <Segmentado
                 rotulo="Filtrar por tipo"
                 tamanho="sm"
@@ -779,7 +1004,9 @@ export default function Agenda() {
                       ? 'Nenhuma reunião na agenda.'
                       : filtroTipo === 'gravacao'
                         ? 'Nenhuma gravação na agenda.'
-                        : 'Nenhum agendamento na agenda.'}
+                        : quem === 'eu'
+                          ? 'Você não tem agendamentos aqui.'
+                          : 'Nenhum agendamento na agenda.'}
                 </p>
                 {filtro !== 'atencao' && (
                   <p className="mt-1 text-sm text-slate-500">Use o formulário ao lado para agendar.</p>
@@ -801,9 +1028,14 @@ export default function Agenda() {
                           key={ag.id}
                           ag={ag}
                           agora={agora}
+                          nomeDe={nomeDe}
+                          emEdicao={editando?.id === ag.id}
+                          ocupado={ocupadoId === ag.id}
                           onCancelar={cancelar}
                           onReagendar={reagendar}
-                          ocupado={cancelandoId === ag.id}
+                          onEditar={editar}
+                          onConfirmar={confirmarManual}
+                          onCopiar={copiarLink}
                         />
                       ))}
                     </ul>
@@ -814,6 +1046,17 @@ export default function Agenda() {
           </section>
         </div>
       </div>
+
+      {toast && (
+        <div
+          role="status"
+          className={`fixed bottom-5 left-1/2 z-30 -translate-x-1/2 rounded-lg px-4 py-2.5 text-sm shadow-lg ${
+            toast.tipo === 'erro' ? 'bg-rose-600 text-white' : 'bg-slate-900 text-white'
+          }`}
+        >
+          {toast.texto}
+        </div>
+      )}
     </div>
   );
 }

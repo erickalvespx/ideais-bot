@@ -17,7 +17,15 @@ const EXEMPLO_BASE = {
   agencia: 'Ideais Agência',
 };
 const EXEMPLOS = {
-  gravacao: { ...EXEMPLO_BASE, tipo: 'gravação', modalidade: '', local: 'Estúdio Ideais', link: '', onde: '📍 Local: Estúdio Ideais' },
+  gravacao: {
+    ...EXEMPLO_BASE,
+    tipo: 'gravação',
+    modalidade: '',
+    local: 'Estúdio Ideais',
+    link: '',
+    onde: '📍 Local: Estúdio Ideais',
+    responsavel: 'Erick Alves',
+  },
   reuniao: {
     ...EXEMPLO_BASE,
     tipo: 'reunião',
@@ -25,6 +33,7 @@ const EXEMPLOS = {
     local: '',
     link: 'https://meet.google.com/abc-defg-hij',
     onde: '💻 Link: https://meet.google.com/abc-defg-hij',
+    responsavel: 'Erick Alves',
   },
 };
 const VARIAVEIS = Object.keys(EXEMPLOS.gravacao);
@@ -42,6 +51,7 @@ const DESCRICAO_VARIAVEL = {
   local: 'Local informado no agendamento',
   link: 'Link da reunião online',
   onde: 'Local ou link já formatado; some se não houver',
+  responsavel: 'Nome de quem vai atender; some se não houver',
 };
 
 const chaveDe = (tipo, chave) => `${tipo}:${chave}`;
