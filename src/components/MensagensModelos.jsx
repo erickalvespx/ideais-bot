@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import PrazoResposta from './PrazoResposta';
 
 const TIPOS = [
   { valor: 'gravacao', rotulo: 'Gravação', icone: '🎬' },
@@ -254,6 +255,8 @@ export default function MensagensModelos() {
           próximos envios, sem precisar publicar nada.
         </p>
       </header>
+
+      <PrazoResposta />
 
       <div role="radiogroup" aria-label="Tipo de agendamento" className="mb-6 inline-flex rounded-lg bg-slate-100 p-1">
         {TIPOS.map((t) => {

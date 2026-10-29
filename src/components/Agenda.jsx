@@ -362,6 +362,7 @@ export default function Agenda({ usuarioId, versaoEquipe }) {
   const [quem, setQuem] = useState('todos');
   const [ocupadoId, setOcupadoId] = useState(null);
   const [toast, setToast] = useState(null);
+  const [prazoHoras, setPrazoHoras] = useState(4);
   const [erros, setErros] = useState({});
   const [salvando, setSalvando] = useState(false);
   const [aviso, setAviso] = useState(null); // { tipo: 'ok' | 'erro' | 'info', texto }
@@ -405,6 +406,16 @@ export default function Agenda({ usuarioId, versaoEquipe }) {
     if (error) setErroLista(traduzirErro(error));
     else setAgendamentos(data ?? []);
     setCarregando(false);
+  }, []);
+
+  // prazo de resposta definido pelo Gestor (usado só nas dicas da tela)
+  useEffect(() => {
+    supabase
+      .from('fluxo_config')
+      .select('prazo_resposta_horas')
+      .eq('id', 1)
+      .single()
+      .then(({ data }) => data && setPrazoHoras(data.prazo_resposta_horas));
   }, []);
 
   // equipe pelo nome (para "Responsável" e "Confirmado por…")
@@ -662,9 +673,9 @@ export default function Agenda({ usuarioId, versaoEquipe }) {
 
   // aviso contextual do horário escolhido
   const horasAte = form.dataHora ? (new Date(form.dataHora) - agora) / UMA_HORA : null;
-  let dicaHorario = 'O cliente recebe o pedido de confirmação 24h antes e tem 2h para responder.';
-  if (horasAte !== null && horasAte > 0 && horasAte < 2) {
-    dicaHorario = 'Faltam menos de 2h: o pedido de confirmação sai ao salvar e vale até o horário marcado.';
+  let dicaHorario = `O cliente recebe o pedido de confirmação 24h antes e tem ${prazoHoras}h para responder.`;
+  if (horasAte !== null && horasAte > 0 && horasAte < prazoHoras) {
+    dicaHorario = `Faltam menos de ${prazoHoras}h: o pedido de confirmação sai ao salvar e vale até o horário marcado.`;
   } else if (horasAte !== null && horasAte > 0 && horasAte < 24) {
     dicaHorario = 'Faltam menos de 24h: o pedido de confirmação sai assim que você salvar.';
   }
@@ -688,7 +699,7 @@ export default function Agenda({ usuarioId, versaoEquipe }) {
           <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Agenda</h1>
           <p className="mt-2 text-sm leading-6 text-slate-600">
             Gravações e reuniões num lugar só. O WhatsApp cuida do resto: pedido de confirmação 24h antes, liberação do
-            horário se o cliente não responder em 2h e lembrete 1h antes.
+            horário se o cliente não responder em {prazoHoras}h e lembrete 1h antes.
           </p>
         </header>
 
